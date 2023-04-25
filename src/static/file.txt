@@ -1,0 +1,11 @@
+If the precision of the basic integer and floating-point types is not sufficient,
+you can turn to a couple of handy classes in the java.math package: BigInteger
+and BigDecimal. These are classes for manipulating numbers with an arbitrarily
+long sequence of digits. The BigInteger class implements arbitrary-precision
+integer arithmetic, and BigDecimal does the same for floating-point numbers.
+
+Listing 3.6 shows a modification of the lottery odds program of Listing 3.5,
+updated to work with big numbers. For example, if you are invited to participate in a lottery in which you need to pick 60 numbers out of a possible
+490 numbers, you can use this program to tell you your odds of winning.
+They are 1 in 716395843461995557415116222540092933411717612789263493493351013459481104668848.
+Good luck
