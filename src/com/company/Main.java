@@ -11,10 +11,10 @@ public class Main {
         long s = System.currentTimeMillis();
 
         TextService ts = new TextService();
-        Map<String, Long> stringLongMap = ts.splitTaskAndCountWords(Path.of("src/static/file.txt"));
+        Map<String, Long> stringLongMap = ts.splitTaskAndCountWords(Path.of("src/static/file.txt"), ProgramMode.DEFAULT);
 
-        System.out.println("Total time: " + (System.currentTimeMillis() - s));
         System.out.println(stringLongMap);
+        System.out.println("Total time: " + (System.currentTimeMillis() - s));
 
     }
 }

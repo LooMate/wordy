@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.*;
 
+
 /**
  * @author _KaTarin_
  * 3/30/2023
@@ -16,9 +17,9 @@ import java.util.concurrent.*;
 
 public class TextService {
 
-    private ThreadPoolExecutor poolExecutor = null;
-    private int numberOfAvailableProcessors;
-    private int separatorLineLength;
+    private ThreadPoolExecutor poolExecutor;
+    private final int numberOfAvailableProcessors;
+    private final int separatorLineLength;
 
 
     public TextService() {
@@ -27,63 +28,79 @@ public class TextService {
     }
 
 
-    public Map<String, Long> splitTaskAndCountWords(Path pathToFile) {
+    public Map<String, Long> splitTaskAndCountWords(Path pathToFile, ProgramMode programMode) {
+
         String line = "";
-
         long totalCharInFile = 0;    //total number of chars in file
-
-        long s = 0;
+        long timeStart = 0;
+        
         try (BufferedReader sourceReader = new BufferedReader(new FileReader(pathToFile.toFile()))) {
-            s = System.currentTimeMillis();
+            timeStart = System.currentTimeMillis();
             while ((line = sourceReader.readLine()) != null) {
                 totalCharInFile += line.length() + this.separatorLineLength;
             }
         } catch (FileNotFoundException e) {
+            System.out.println("Please check FILE path");
+            System.out.println(e.getMessage());
             e.printStackTrace();
         } catch (IOException e) {
+            System.out.println(e.getMessage());
             e.printStackTrace();
         }
-        System.out.println("Read with time: " + (System.currentTimeMillis() - s));
+        if(programMode == ProgramMode.EXPLAIN || programMode == ProgramMode.EXPLAIN_IN_SINGLE_THREAD)
+            System.out.println("Read with time: " + (System.currentTimeMillis() - timeStart));
 
-        return apportionTextToThreads(pathToFile, totalCharInFile, 2);
+        return apportionTextToThreads(pathToFile, totalCharInFile, programMode);
     }
 
-    private Map<String, Long> apportionTextToThreads(Path pathToFile, long totalCharInFile, int scaleOfLoad) {
+
+    private Map<String, Long> apportionTextToThreads(Path pathToFile, long totalCharInFile, ProgramMode programMode) {
 
         Map<String, Long> resultMap = new ConcurrentHashMap<>();
 
-        long chunkSize = 0;             //chunks for process in multiple threads
-        long skipCharCount = 0;         //first line for processing in certain thread
-        long endChar = 0;               //last line fir processing in certain thread
+        long chunkSize = 0;             //chunks     to be processed in multiple threads
+        long skipCharCount = 0;         //first line to be processed in a certain thread
+        long endChar = 0;               //last line  to be processes in a certain thread
         long numOfSkipped = 0;          //actual number of skipped chars
+        int numOfAvProc = 0;            //number of cores used in a calculation
+        boolean showTime = false;       //display the time to executed process
 
-        BlockingQueue<Runnable> processThreadQueue = new ArrayBlockingQueue<>(numberOfAvailableProcessors * scaleOfLoad);
-        this.poolExecutor = new ThreadPoolExecutor(numberOfAvailableProcessors, numberOfAvailableProcessors,
+        switch (programMode) {
+            case EXPLAIN_IN_SINGLE_THREAD: showTime = true;
+            case SINGLE_THREAD: numOfAvProc = 1;break;
+            case EXPLAIN: showTime = true;
+            case DEFAULT: numOfAvProc = this.numberOfAvailableProcessors; break;
+            default: System.out.println("SOMETHING WENT WRONG \n TextService apportionTextToThreads");
+        }
+
+        BlockingQueue<Runnable> processThreadQueue = new ArrayBlockingQueue<>(numOfAvProc);
+        this.poolExecutor = new ThreadPoolExecutor(numOfAvProc, numOfAvProc,
                 0, TimeUnit.MICROSECONDS, processThreadQueue);
 
-        numberOfAvailableProcessors *= scaleOfLoad;
-
-        endChar = chunkSize = totalCharInFile / numberOfAvailableProcessors;
+        endChar = chunkSize = totalCharInFile / numOfAvProc;
 
         try (BufferedReader sourceReader = new BufferedReader(new FileReader(pathToFile.toFile()))) {
             numOfSkipped = sourceReader.skip(endChar);
             endChar = this.skipLetter(sourceReader, numOfSkipped);
 
-            for (int i = 0; i < this.numberOfAvailableProcessors - 1; ++i) {
-                processThreadQueue.add(new ProcessThread(this, pathToFile, resultMap, skipCharCount, endChar));
+            if(numOfAvProc != 1) --numOfAvProc;         //leave alone LAST cycle
+            for (int i = 0; i < numOfAvProc; ++i) {
+                processThreadQueue.add(new ProcessThread(this, pathToFile, resultMap, skipCharCount, endChar, showTime));
 
                 if (sourceReader.skip(chunkSize) < chunkSize) break;
 
                 skipCharCount = endChar;
                 endChar = this.skipLetter(sourceReader, skipCharCount + chunkSize);
             }
-            if (skipCharCount < totalCharInFile) {
-                skipCharCount = endChar;
-                processThreadQueue.add(new ProcessThread(this, pathToFile, resultMap, skipCharCount, totalCharInFile));
+
+            if (endChar < totalCharInFile) {            // process LAST cycle
+                processThreadQueue.add(new ProcessThread(this, pathToFile, resultMap, endChar, totalCharInFile, showTime));
             }
         } catch (FileNotFoundException e) {
+            System.out.println(e.getMessage());
             e.printStackTrace();
         } catch (IOException e) {
+            System.out.println(e.getMessage());
             e.printStackTrace();
         }
 
@@ -92,6 +109,7 @@ public class TextService {
         try {
             this.poolExecutor.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
+            System.out.println(e.getMessage());
             e.printStackTrace();
         }
         return resultMap;
@@ -109,16 +127,17 @@ public class TextService {
         return fromChar;
     }
 
-    public void countWords(Path path, Map<String, Long> resultMap, long startWord, long endWord) {
+    public void countWords(Path path, Map<String, Long> resultMap, long startWord, long endWord, boolean showTime) {
         long s = System.currentTimeMillis();
+
+        int charCount = 0;
+        int charLetter = 0;
+        StringBuilder word = new StringBuilder();
+
         try (BufferedReader sourceReader = new BufferedReader(new FileReader(path.toFile()))) {
             sourceReader.skip(startWord);
-            int charCount = 0;
 
-            StringBuilder word = new StringBuilder();
-            int charLetter = 0;
-
-            while ((charLetter = sourceReader.read()) != -1 && charCount < endWord - startWord) {       // FIXME: 4/25/2023 remake regex to recognize "*.*" for example java.Math
+            while ((charLetter = sourceReader.read()) != -1 && charCount < endWord - startWord) {   // FIXME: 4/25/2023 remake regex to recognize "*.*" for example java.Math
                 if (charLetter == '\n' || charLetter == '\r' || charLetter == ' ' || charLetter == ',' || charLetter == '.' ||
                         charLetter == '!' || charLetter == '?' || charLetter == '\"' || charLetter == ':'|| charLetter == '-'||
                         charLetter == '_' || charLetter == ';' || charLetter == '&' || charLetter == '*' || charLetter == '(' ||
@@ -135,10 +154,12 @@ public class TextService {
             }
             if (word.length() != 0) resultMap.merge(word.toString(), 1L, Long::sum);
 
-            System.out.println(Thread.currentThread() + " read time: " + (System.currentTimeMillis() - s));
+            if(showTime) System.out.println(Thread.currentThread() + " read time: " + (System.currentTimeMillis() - s));
         } catch (FileNotFoundException e) {
+            System.out.println(e.getMessage());
             e.printStackTrace();
         } catch (IOException e) {
+            System.out.println(e.getMessage());
             e.printStackTrace();
         }
     }
