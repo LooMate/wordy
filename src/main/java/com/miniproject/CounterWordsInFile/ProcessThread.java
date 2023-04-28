@@ -1,4 +1,4 @@
-package com.company;
+package com.miniproject.CounterWordsInFile;
 
 
 import java.nio.file.Path;

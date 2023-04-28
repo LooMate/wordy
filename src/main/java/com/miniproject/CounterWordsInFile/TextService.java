@@ -1,5 +1,7 @@
-package com.company;
+package com.miniproject.CounterWordsInFile;
 
+
+import com.miniproject.CounterWordsInFile.enums.ProgramMode;
 
 import java.io.BufferedReader;
 import java.io.FileNotFoundException;
@@ -28,12 +30,13 @@ public class TextService {
     }
 
 
+
     public Map<String, Long> splitTaskAndCountWords(Path pathToFile, ProgramMode programMode) {
 
         String line = "";
         long totalCharInFile = 0;    //total number of chars in file
         long timeStart = 0;
-        
+
         try (BufferedReader sourceReader = new BufferedReader(new FileReader(pathToFile.toFile()))) {
             timeStart = System.currentTimeMillis();
             while ((line = sourceReader.readLine()) != null) {
@@ -66,11 +69,18 @@ public class TextService {
         boolean showTime = false;       //display the time to executed process
 
         switch (programMode) {
-            case EXPLAIN_IN_SINGLE_THREAD: showTime = true;
-            case SINGLE_THREAD: numOfAvProc = 1;break;
-            case EXPLAIN: showTime = true;
-            case DEFAULT: numOfAvProc = this.numberOfAvailableProcessors; break;
-            default: System.out.println("SOMETHING WENT WRONG \n TextService apportionTextToThreads");
+            case EXPLAIN_IN_SINGLE_THREAD:
+                showTime = true;
+            case SINGLE_THREAD:
+                numOfAvProc = 1;
+                break;
+            case EXPLAIN:
+                showTime = true;
+            case DEFAULT:
+                numOfAvProc = this.numberOfAvailableProcessors;
+                break;
+            default:
+                System.out.println("SOMETHING WENT WRONG \n TextService apportionTextToThreads");
         }
 
         BlockingQueue<Runnable> processThreadQueue = new ArrayBlockingQueue<>(numOfAvProc);
@@ -83,7 +93,7 @@ public class TextService {
             numOfSkipped = sourceReader.skip(endChar);
             endChar = this.skipLetter(sourceReader, numOfSkipped);
 
-            if(numOfAvProc != 1) --numOfAvProc;         //leave alone LAST cycle
+            if (numOfAvProc != 1) --numOfAvProc;         //leave alone LAST cycle
             for (int i = 0; i < numOfAvProc; ++i) {
                 processThreadQueue.add(new ProcessThread(this, pathToFile, resultMap, skipCharCount, endChar, showTime));
 
@@ -137,12 +147,13 @@ public class TextService {
         try (BufferedReader sourceReader = new BufferedReader(new FileReader(path.toFile()))) {
             sourceReader.skip(startWord);
 
+            // FIXME: 4/27/2023 remake it with readline
             while ((charLetter = sourceReader.read()) != -1 && charCount < endWord - startWord) {   // FIXME: 4/25/2023 remake regex to recognize "*.*" for example java.Math
                 if (charLetter == '\n' || charLetter == '\r' || charLetter == ' ' || charLetter == ',' || charLetter == '.' ||
-                        charLetter == '!' || charLetter == '?' || charLetter == '\"' || charLetter == ':'|| charLetter == '-'||
+                        charLetter == '!' || charLetter == '?' || charLetter == '\"' || charLetter == ':' || charLetter == '-' ||
                         charLetter == '_' || charLetter == ';' || charLetter == '&' || charLetter == '*' || charLetter == '(' ||
-                        charLetter == ')' || charLetter == '{' || charLetter == '}' || charLetter == '“'|| charLetter == '”'||
-                        charLetter == '‘' || charLetter == '/'|| charLetter == '\\') {
+                        charLetter == ')' || charLetter == '{' || charLetter == '}' || charLetter == '“' || charLetter == '”' ||
+                        charLetter == '‘' || charLetter == '/' || charLetter == '\\'|| charLetter == '•') {
                     if (word.length() != 0) {
                         resultMap.merge(word.toString(), 1L, Long::sum);
                         word.setLength(0);
@@ -154,7 +165,8 @@ public class TextService {
             }
             if (word.length() != 0) resultMap.merge(word.toString(), 1L, Long::sum);
 
-            if(showTime) System.out.println(Thread.currentThread() + " read time: " + (System.currentTimeMillis() - s));
+            if (showTime)
+                System.out.println(Thread.currentThread() + " read time: " + (System.currentTimeMillis() - s));
         } catch (FileNotFoundException e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
