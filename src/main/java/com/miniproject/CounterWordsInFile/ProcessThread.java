@@ -17,23 +17,21 @@ public class ProcessThread implements Runnable {
     private Map<String, Long> originMap;
     private long skipCharCount;
     private long endChar;
-    private boolean showTime;
 
     public ProcessThread() {
     }
 
-    public ProcessThread(TextService textService, Path path, Map<String, Long> originMap, long skipCharCount, long endChar, boolean showTime) {
+    public ProcessThread(TextService textService, Path path, Map<String, Long> originMap, long skipCharCount, long endChar) {
         this.textService = textService;
         this.path = path;
         this.originMap = originMap;
         this.skipCharCount = skipCharCount;
         this.endChar = endChar;
-        this.showTime = showTime;
     }
 
     @Override
     public void run() {
-        textService.countWords(this.path, this.originMap, this.skipCharCount, this.endChar, this.showTime);
+        textService.countWords(this.path, this.originMap, this.skipCharCount, this.endChar);
     }
 
     public TextService getTextService() {
@@ -86,11 +84,4 @@ public class ProcessThread implements Runnable {
                 '}';
     }
 
-    public boolean isShowTime() {
-        return showTime;
-    }
-
-    public void setShowTime(boolean showTime) {
-        this.showTime = showTime;
-    }
 }
