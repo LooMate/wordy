@@ -8,6 +8,7 @@ import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.*;
 
@@ -23,12 +24,13 @@ public class TextService {
     private final int numberOfAvailableProcessors;
     private final int separatorLineLength;
 
+    private boolean showTime;
+    private int numOfProc;
 
     public TextService() {
         this.numberOfAvailableProcessors = Runtime.getRuntime().availableProcessors();
         this.separatorLineLength = System.lineSeparator().length();
     }
-
 
 
     public Map<String, Long> splitTaskAndCountWords(Path pathToFile, ProgramMode programMode) {
@@ -39,9 +41,9 @@ public class TextService {
 
         try (BufferedReader sourceReader = new BufferedReader(new FileReader(pathToFile.toFile()))) {
             timeStart = System.currentTimeMillis();
-            while ((line = sourceReader.readLine()) != null) {
+            while ((line = sourceReader.readLine()) != null)
                 totalCharInFile += line.length() + this.separatorLineLength;
-            }
+
         } catch (FileNotFoundException e) {
             System.out.println("Please check FILE path");
             System.out.println(e.getMessage());
@@ -50,14 +52,36 @@ public class TextService {
             System.out.println(e.getMessage());
             e.printStackTrace();
         }
-        if(programMode == ProgramMode.EXPLAIN || programMode == ProgramMode.EXPLAIN_IN_SINGLE_THREAD)
-            System.out.println("Read with time: " + (System.currentTimeMillis() - timeStart));
 
-        return apportionTextToThreads(pathToFile, totalCharInFile, programMode);
+        setModeForService(programMode);
+        if (this.showTime) {
+            System.out.println("Read with time: " + (System.currentTimeMillis() - timeStart));
+        }
+
+        if (totalCharInFile == 0) return new HashMap<>();             // FIXME: 5/1/2023 have to throw an Exception
+
+        return apportionTextToThreads(pathToFile, totalCharInFile);
+    }
+
+    private void setModeForService(ProgramMode programMode) {
+        switch (programMode) {
+            case EXPLAIN_IN_SINGLE_THREAD:
+                this.showTime = true;
+            case SINGLE_THREAD:
+                this.numOfProc = 1;
+                break;
+            case EXPLAIN:
+                this.showTime = true;
+            case DEFAULT:
+                this.numOfProc = this.numberOfAvailableProcessors;
+                break;
+            default:
+                System.out.println("SOMETHING WENT WRONG \n TextService apportionTextToThreads");
+        }
     }
 
 
-    private Map<String, Long> apportionTextToThreads(Path pathToFile, long totalCharInFile, ProgramMode programMode) {
+    private Map<String, Long> apportionTextToThreads(Path pathToFile, long totalCharInFile) {
 
         Map<String, Long> resultMap = new ConcurrentHashMap<>();
 
@@ -65,37 +89,19 @@ public class TextService {
         long skipCharCount = 0;         //first line to be processed in a certain thread
         long endChar = 0;               //last line  to be processes in a certain thread
         long numOfSkipped = 0;          //actual number of skipped chars
-        int numOfAvProc = 0;            //number of cores used in a calculation
-        boolean showTime = false;       //display the time to executed process
 
-        switch (programMode) {
-            case EXPLAIN_IN_SINGLE_THREAD:
-                showTime = true;
-            case SINGLE_THREAD:
-                numOfAvProc = 1;
-                break;
-            case EXPLAIN:
-                showTime = true;
-            case DEFAULT:
-                numOfAvProc = this.numberOfAvailableProcessors;
-                break;
-            default:
-                System.out.println("SOMETHING WENT WRONG \n TextService apportionTextToThreads");
-        }
+        BlockingQueue<Runnable> processThreadQueue = new ArrayBlockingQueue<>(this.numOfProc);
+        this.poolExecutor = new ThreadPoolExecutor(this.numOfProc, this.numOfProc, 0,
+                TimeUnit.MICROSECONDS, processThreadQueue);
 
-        BlockingQueue<Runnable> processThreadQueue = new ArrayBlockingQueue<>(numOfAvProc);
-        this.poolExecutor = new ThreadPoolExecutor(numOfAvProc, numOfAvProc,
-                0, TimeUnit.MICROSECONDS, processThreadQueue);
-
-        endChar = chunkSize = totalCharInFile / numOfAvProc;
-
+        endChar = chunkSize = totalCharInFile / this.numOfProc;
         try (BufferedReader sourceReader = new BufferedReader(new FileReader(pathToFile.toFile()))) {
+
             numOfSkipped = sourceReader.skip(endChar);
             endChar = this.skipLetter(sourceReader, numOfSkipped);
 
-            if (numOfAvProc != 1) --numOfAvProc;         //leave alone LAST cycle
-            for (int i = 0; i < numOfAvProc; ++i) {
-                processThreadQueue.add(new ProcessThread(this, pathToFile, resultMap, skipCharCount, endChar, showTime));
+            for (int i = 0; i < this.numOfProc--; ) {
+                processThreadQueue.add(new ProcessThread(this, pathToFile, resultMap, skipCharCount, endChar));
 
                 if (sourceReader.skip(chunkSize) < chunkSize) break;
 
@@ -103,8 +109,8 @@ public class TextService {
                 endChar = this.skipLetter(sourceReader, skipCharCount + chunkSize);
             }
 
-            if (endChar < totalCharInFile) {            // process LAST cycle
-                processThreadQueue.add(new ProcessThread(this, pathToFile, resultMap, endChar, totalCharInFile, showTime));
+            if (endChar < totalCharInFile && this.numOfProc > 0) {            // process LAST cycle
+                processThreadQueue.add(new ProcessThread(this, pathToFile, resultMap, endChar, totalCharInFile));
             }
         } catch (FileNotFoundException e) {
             System.out.println(e.getMessage());
@@ -116,6 +122,7 @@ public class TextService {
 
         this.poolExecutor.prestartAllCoreThreads();
         this.poolExecutor.shutdown();
+
         try {
             this.poolExecutor.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
@@ -126,18 +133,20 @@ public class TextService {
     }
 
     private long skipLetter(BufferedReader sourceReader, long fromChar) throws IOException {
-        int letter = 0;
-        if ((letter = sourceReader.read()) != -1) {
-            while ((letter) != 10 && letter != -1) {
-                fromChar += 1;
-                letter = sourceReader.read();
+        switch (sourceReader.read()) {
+            case -1:
+            case '\n':
+                return fromChar + 1;
+            case '\r': {
+                sourceReader.read();
+                return fromChar + 2;
             }
-            if (this.separatorLineLength == 2) fromChar += 1;
+            default:
+                return fromChar + sourceReader.readLine().length() + this.separatorLineLength + 1;
         }
-        return fromChar;
     }
 
-    public void countWords(Path path, Map<String, Long> resultMap, long startWord, long endWord, boolean showTime) {
+    public void countWords(Path path, Map<String, Long> resultMap, long startWord, long endWord) {
         long s = System.currentTimeMillis();
 
         int charCount = 0;
@@ -147,13 +156,12 @@ public class TextService {
         try (BufferedReader sourceReader = new BufferedReader(new FileReader(path.toFile()))) {
             sourceReader.skip(startWord);
 
-            // FIXME: 4/27/2023 remake it with readline
             while ((charLetter = sourceReader.read()) != -1 && charCount < endWord - startWord) {   // FIXME: 4/25/2023 remake regex to recognize "*.*" for example java.Math
                 if (charLetter == '\n' || charLetter == '\r' || charLetter == ' ' || charLetter == ',' || charLetter == '.' ||
                         charLetter == '!' || charLetter == '?' || charLetter == '\"' || charLetter == ':' || charLetter == '-' ||
                         charLetter == '_' || charLetter == ';' || charLetter == '&' || charLetter == '*' || charLetter == '(' ||
                         charLetter == ')' || charLetter == '{' || charLetter == '}' || charLetter == '“' || charLetter == '”' ||
-                        charLetter == '‘' || charLetter == '/' || charLetter == '\\'|| charLetter == '•') {
+                        charLetter == '‘' || charLetter == '/' || charLetter == '\\' || charLetter == '•') {
                     if (word.length() != 0) {
                         resultMap.merge(word.toString(), 1L, Long::sum);
                         word.setLength(0);
@@ -165,14 +173,15 @@ public class TextService {
             }
             if (word.length() != 0) resultMap.merge(word.toString(), 1L, Long::sum);
 
-            if (showTime)
-                System.out.println(Thread.currentThread() + " read time: " + (System.currentTimeMillis() - s));
         } catch (FileNotFoundException e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
         } catch (IOException e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
+        }
+        if (this.showTime) {
+            System.out.println(Thread.currentThread() + " read time: " + (System.currentTimeMillis() - s));
         }
     }
 }
