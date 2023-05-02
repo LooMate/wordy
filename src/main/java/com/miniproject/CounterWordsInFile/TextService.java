@@ -22,28 +22,30 @@ public class TextService {
 
     private ThreadPoolExecutor poolExecutor;
     private final int numberOfAvailableProcessors;
-    private final int separatorLineLength;
+    private int separatorLineLength;
 
     private boolean showTime;
-    private int numOfProc;
+    private int numOfProc;          // number of processors used by application
 
     public TextService() {
-        this.numberOfAvailableProcessors = Runtime.getRuntime().availableProcessors();
-        this.separatorLineLength = System.lineSeparator().length();
+        this.numberOfAvailableProcessors = Runtime.getRuntime().availableProcessors();// set number of processors that available on a machine
     }
 
-
+    // this method counts all the chars in the file and then calls a method that will distribute the load to the threads
     public Map<String, Long> splitTaskAndCountWords(Path pathToFile, ProgramMode programMode) {
-
-        String line = "";
-        long totalCharInFile = 0;    //total number of chars in file
         long timeStart = 0;
 
-        try (BufferedReader sourceReader = new BufferedReader(new FileReader(pathToFile.toFile()))) {
-            timeStart = System.currentTimeMillis();
-            while ((line = sourceReader.readLine()) != null)
-                totalCharInFile += line.length() + this.separatorLineLength;
+        String line = "";
+        long totalCharInFile = 0;       //total number of chars in file
 
+        try (BufferedReader sourceReader = new BufferedReader(new FileReader(pathToFile.toFile()))) {//read all file and count
+            timeStart = System.currentTimeMillis();
+
+            totalCharInFile = determineLineSeparatorLengthInFile(sourceReader); //determine separator line length in the file
+
+            while ((line = sourceReader.readLine()) != null) { // pass through the whole file and count
+                totalCharInFile += line.length() + this.separatorLineLength;
+            }
         } catch (FileNotFoundException e) {
             System.out.println("Please check FILE path");
             System.out.println(e.getMessage());
@@ -58,11 +60,27 @@ public class TextService {
             System.out.println("Read with time: " + (System.currentTimeMillis() - timeStart));
         }
 
-        if (totalCharInFile == 0) return new HashMap<>();             // FIXME: 5/1/2023 have to throw an Exception
+        if (totalCharInFile == 0) return new HashMap<>();
 
         return apportionTextToThreads(pathToFile, totalCharInFile);
     }
 
+
+    private int determineLineSeparatorLengthInFile(BufferedReader sourceReader) throws IOException {
+        int addCharToTotal = 0;
+        int chr = 0;
+        while ((chr = sourceReader.read()) != -1 && chr != 10 && chr != 13) {
+            ++addCharToTotal;
+        }
+        this.separatorLineLength = 1;
+        if ((chr = sourceReader.read()) == 10 || chr == 13) {
+            this.separatorLineLength = 2;
+        }
+        ++addCharToTotal;
+        return addCharToTotal;
+    }
+
+    // set the number of processors and showTime
     private void setModeForService(ProgramMode programMode) {
         switch (programMode) {
             case EXPLAIN_IN_SINGLE_THREAD:
@@ -80,7 +98,7 @@ public class TextService {
         }
     }
 
-
+    //method that will distribute the load to the threads and run them
     private Map<String, Long> apportionTextToThreads(Path pathToFile, long totalCharInFile) {
 
         Map<String, Long> resultMap = new ConcurrentHashMap<>();
@@ -120,11 +138,11 @@ public class TextService {
             e.printStackTrace();
         }
 
-        this.poolExecutor.prestartAllCoreThreads();
-        this.poolExecutor.shutdown();
+        this.poolExecutor.prestartAllCoreThreads(); // run all threads in a thread pool
+        this.poolExecutor.shutdown();               // does not take any more threads to execute
 
         try {
-            this.poolExecutor.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
+            this.poolExecutor.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS); // wait for terminating all threads
         } catch (InterruptedException e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
@@ -132,20 +150,22 @@ public class TextService {
         return resultMap;
     }
 
+    // it makes chunk's end at the end of the line
     private long skipLetter(BufferedReader sourceReader, long fromChar) throws IOException {
         switch (sourceReader.read()) {
-            case -1:
-            case '\n':
-                return fromChar + 1;
-            case '\r': {
-                sourceReader.read();
-                return fromChar + 2;
+            case -1:                                                    // the end of the file
+            case '\n':                                                  // the end of the line CRLF(\r\n) of LF(\n),
+                return fromChar + 1;                                        // so we jump to next line with +1
+            case '\r': {                                                // the end of the CR(/r) or part of CRLF(\r\n)
+                if (this.separatorLineLength == 2) sourceReader.read(); // if it is part of CRLF(\r\n) read next char to maintain reader consistency
+                return fromChar + this.separatorLineLength;             // and jump to the next line
             }
             default:
-                return fromChar + sourceReader.readLine().length() + this.separatorLineLength + 1;
+                return fromChar + sourceReader.readLine().length() + this.separatorLineLength + 1; // +1 to jump to next line
         }
     }
 
+    // count words in the file using thread pool
     public void countWords(Path path, Map<String, Long> resultMap, long startWord, long endWord) {
         long s = System.currentTimeMillis();
 
@@ -154,8 +174,9 @@ public class TextService {
         StringBuilder word = new StringBuilder();
 
         try (BufferedReader sourceReader = new BufferedReader(new FileReader(path.toFile()))) {
-            sourceReader.skip(startWord);
+            sourceReader.skip(startWord);       // skip to the start point for processing
 
+            // read char by char and process
             while ((charLetter = sourceReader.read()) != -1 && charCount < endWord - startWord) {   // FIXME: 4/25/2023 remake regex to recognize "*.*" for example java.Math
                 if (charLetter == '\n' || charLetter == '\r' || charLetter == ' ' || charLetter == ',' || charLetter == '.' ||
                         charLetter == '!' || charLetter == '?' || charLetter == '\"' || charLetter == ':' || charLetter == '-' ||
