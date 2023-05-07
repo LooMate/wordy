@@ -8,7 +8,6 @@ import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.*;
 
@@ -20,7 +19,6 @@ import java.util.concurrent.*;
 
 public class TextService {
 
-    private ThreadPoolExecutor poolExecutor;
     private final int numberOfAvailableProcessors;
     private int separatorLineLength;
 
@@ -31,15 +29,35 @@ public class TextService {
         this.numberOfAvailableProcessors = Runtime.getRuntime().availableProcessors();// set number of processors that available on a machine
     }
 
-    // this method counts all the chars in the file and then calls a method that will distribute the load to the threads
-    public Map<String, Long> splitTaskAndCountWords(Path pathToFile, ProgramMode programMode) {
-        long timeStart = 0;
 
+    public Map<String, Long> splitTaskAndCountWords(Path pathToFile, ProgramMode programMode) {
+        Map<String, Long> resultMap = new ConcurrentHashMap<>();
+
+        // this method counts all the chars in the file
+        long timeStart = System.currentTimeMillis();
+
+        long totalCharInFile = countCharsInFile(pathToFile);
+        setModeForService(programMode);
+
+        if (this.showTime) {
+            System.out.println("Read with time: " + (System.currentTimeMillis() - timeStart));
+        }
+
+
+        // distribute the load to the threads
+        BlockingQueue<Runnable> processThreadQueue = apportionTextToThreads(pathToFile, totalCharInFile, resultMap);
+
+        runAllThreadPool(processThreadQueue);
+
+        return resultMap;
+    }
+
+    // this method counts all the chars in the file
+    private long countCharsInFile(Path pathToFile) {
         String line = "";
         long totalCharInFile = 0;       //total number of chars in file
 
         try (BufferedReader sourceReader = new BufferedReader(new FileReader(pathToFile.toFile()))) {//read all file and count
-            timeStart = System.currentTimeMillis();
 
             totalCharInFile = determineLineSeparatorLengthInFile(sourceReader); //determine separator line length in the file
 
@@ -54,15 +72,7 @@ public class TextService {
             System.out.println(e.getMessage());
             e.printStackTrace();
         }
-
-        setModeForService(programMode);
-        if (this.showTime) {
-            System.out.println("Read with time: " + (System.currentTimeMillis() - timeStart));
-        }
-
-        if (totalCharInFile == 0) return new HashMap<>();
-
-        return apportionTextToThreads(pathToFile, totalCharInFile);
+        return totalCharInFile;
     }
 
 
@@ -72,11 +82,15 @@ public class TextService {
         while ((chr = sourceReader.read()) != -1 && chr != 10 && chr != 13) {
             ++addCharToTotal;
         }
-        this.separatorLineLength = 1;
-        if ((chr = sourceReader.read()) == 10 || chr == 13) {
-            this.separatorLineLength = 2;
+        if(chr == 10 || chr == 13) {
+            this.separatorLineLength = 1;
+            ++addCharToTotal;
         }
-        ++addCharToTotal;
+        if ((chr = sourceReader.read()) != -1 && (chr == 10 || chr == 13)) {
+            this.separatorLineLength = 2;
+            ++addCharToTotal;
+        }
+
         return addCharToTotal;
     }
 
@@ -93,15 +107,11 @@ public class TextService {
             case DEFAULT:
                 this.numOfProc = this.numberOfAvailableProcessors;
                 break;
-            default:
-                System.out.println("SOMETHING WENT WRONG \n TextService apportionTextToThreads");
-        }
+            }
     }
 
-    //method that will distribute the load to the threads and run them
-    private Map<String, Long> apportionTextToThreads(Path pathToFile, long totalCharInFile) {
-
-        Map<String, Long> resultMap = new ConcurrentHashMap<>();
+    //method that will distribute the load to the threads
+    private BlockingQueue<Runnable> apportionTextToThreads(Path pathToFile, long totalCharInFile, Map<String, Long> resultMap) {
 
         long chunkSize = 0;             //chunks     to be processed in multiple threads
         long skipCharCount = 0;         //first line to be processed in a certain thread
@@ -109,8 +119,6 @@ public class TextService {
         long numOfSkipped = 0;          //actual number of skipped chars
 
         BlockingQueue<Runnable> processThreadQueue = new ArrayBlockingQueue<>(this.numOfProc);
-        this.poolExecutor = new ThreadPoolExecutor(this.numOfProc, this.numOfProc, 0,
-                TimeUnit.MICROSECONDS, processThreadQueue);
 
         endChar = chunkSize = totalCharInFile / this.numOfProc;
         try (BufferedReader sourceReader = new BufferedReader(new FileReader(pathToFile.toFile()))) {
@@ -118,7 +126,8 @@ public class TextService {
             numOfSkipped = sourceReader.skip(endChar);
             endChar = this.skipLetter(sourceReader, numOfSkipped);
 
-            for (int i = 0; i < this.numOfProc--; ) {
+            for (int i = 0; i < this.numOfProc--; ) { // FIXME: 5/4/2023 explain what's going on right here
+
                 processThreadQueue.add(new ProcessThread(this, pathToFile, resultMap, skipCharCount, endChar));
 
                 if (sourceReader.skip(chunkSize) < chunkSize) break;
@@ -138,16 +147,22 @@ public class TextService {
             e.printStackTrace();
         }
 
-        this.poolExecutor.prestartAllCoreThreads(); // run all threads in a thread pool
-        this.poolExecutor.shutdown();               // does not take any more threads to execute
+        return processThreadQueue;
+    }
+
+    private void runAllThreadPool(BlockingQueue processThreadQueue) {
+        ThreadPoolExecutor poolExecutor = new ThreadPoolExecutor(this.numOfProc, this.numOfProc, 0,
+                TimeUnit.MICROSECONDS, processThreadQueue);
+
+        poolExecutor.prestartAllCoreThreads(); // run all threads in a thread pool
+        poolExecutor.shutdown();               // does not take any more threads to execute
 
         try {
-            this.poolExecutor.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS); // wait for terminating all threads
+            poolExecutor.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS); // wait for terminating all threads
         } catch (InterruptedException e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
         }
-        return resultMap;
     }
 
     // it makes chunk's end at the end of the line
@@ -157,7 +172,8 @@ public class TextService {
             case '\n':                                                  // the end of the line CRLF(\r\n) of LF(\n),
                 return fromChar + 1;                                        // so we jump to next line with +1
             case '\r': {                                                // the end of the CR(/r) or part of CRLF(\r\n)
-                if (this.separatorLineLength == 2) sourceReader.read(); // if it is part of CRLF(\r\n) read next char to maintain reader consistency
+                if (this.separatorLineLength == 2)
+                    sourceReader.read(); // if it is part of CRLF(\r\n) read next char to maintain reader consistency
                 return fromChar + this.separatorLineLength;             // and jump to the next line
             }
             default:
@@ -204,5 +220,18 @@ public class TextService {
         if (this.showTime) {
             System.out.println(Thread.currentThread() + " read time: " + (System.currentTimeMillis() - s));
         }
+    }
+
+
+    public int getSeparatorLineLength() {
+        return separatorLineLength;
+    }
+
+    public boolean isShowTime() {
+        return showTime;
+    }
+
+    public int getNumOfProc() {
+        return numOfProc;
     }
 }
